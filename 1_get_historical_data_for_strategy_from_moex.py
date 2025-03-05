@@ -19,51 +19,30 @@ from datetime import datetime, timedelta
 from my_config.trade_config import Config  # Файл конфигурации торгового робота
 
 
-async def get_candles(session, ticker, timeframes, start, end):
-    """Функция получения свечей с MOEX."""
-    for timeframe in timeframes:
-        tf = functions.get_timeframe_moex(timeframe)
-        data = await aiomoex.get_market_candles(session, ticker, interval=tf, start=start, end=end)  # M10
-        df = pd.DataFrame(data)
-        df['datetime'] = pd.to_datetime(df['begin'], format='%Y-%m-%d %H:%M:%S')
-        # для M1, M10, H1 - приводим дату свечи в правильный вид
-        if tf in [1, 10, 60]:
-            df['datetime'] = df['datetime'].apply(lambda x: x + timedelta(minutes=tf))
-        df = df[["datetime", "open", "high", "low", "close", "volume"]].copy()
-        df.to_csv(os.path.join("csv", f"{ticker}_{timeframe}.csv"), index=False, encoding='utf-8', sep=',')
-        print(f"{ticker} {tf}:")
-        print(df)
+from binance.client import Client
+import pandas as pd
+import os
 
+# Replace with your actual Binance API credentials
+API_KEY = "YOUR_BINANCE_API_KEY"
+API_SECRET = "YOUR_BINANCE_API_SECRET"
+client = Client(api_key=API_KEY, api_secret=API_SECRET)
 
-async def get_all_historical_candles(portfolio, timeframes, start, end):
-    """Запуск асинхронной задачи получения исторических данных для каждого тикера из портфеля."""
-    async with aiohttp.ClientSession() as session:
-        strategy_tasks = []
-        for instrument in portfolio:
-            strategy_tasks.append(asyncio.create_task(get_candles(session, instrument, timeframes, start, end)))
-        await asyncio.gather(*strategy_tasks)
-
+def get_crypto_history(symbol, interval, start_str):
+    klines = client.get_historical_klines(symbol, interval, start_str)
+    os.makedirs("csv", exist_ok=True)
+    columns = ['open_time', 'open', 'high', 'low', 'close', 'volume', 
+               'close_time', 'quote_asset_volume', 'number_of_trades', 
+               'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore']
+    data = pd.DataFrame(klines, columns=columns)
+    data['open_time'] = pd.to_datetime(data['open_time'], unit='ms')
+    data.to_csv(f"csv/{symbol}.csv", index=False)
+    print(f"Saved historical data for {symbol}")
 
 if __name__ == "__main__":
+    cryptos = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "XRP": "XRPUSDT", "LTC": "LTCUSDT", "BCH": "BCHUSDT"}
+    for crypto, symbol in cryptos.items():
+        print(f"Fetching historical data for {crypto}")
+        get_crypto_history(symbol, Client.KLINE_INTERVAL_1HOUR, "1 Jan 2023")
 
-    # применение настроек из config.py
-    portfolio = Config.portfolio  # тикеры по которым скачиваем исторические данные
-    timeframe_0 = Config.timeframe_0  # таймфрейм для обучения нейросети - вход
-    timeframe_1 = Config.timeframe_1  # таймфрейм для обучения нейросети - выход
-    start = Config.start  # с какой даты загружаем исторические данные с MOEX
-    end = datetime.now().strftime("%Y-%m-%d")  # по сегодня
-    
-    # создаем необходимые каталоги
-    functions.create_some_folders(timeframes=[timeframe_0, timeframe_1])
 
-    # запуск асинхронного цикла получения исторических данных
-    loop = asyncio.get_event_loop()  # создаем цикл
-    task = loop.create_task(  # в цикл добавляем 1 задачу
-        get_all_historical_candles(  # запуск получения исторических данных с MOEX
-            portfolio=portfolio,
-            timeframes=[timeframe_0, timeframe_1],  # по каким таймфреймам скачиваем данные
-            start=start,
-            end=end,
-        )
-    )
-    loop.run_until_complete(task)  # ждем окончания выполнения цикла 

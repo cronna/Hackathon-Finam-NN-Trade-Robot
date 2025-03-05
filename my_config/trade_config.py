@@ -2,8 +2,8 @@
 
 class Config:
 
-    training_NN = {"SBER", "VTBR"}  # тикеры по которым обучаем нейросеть
-    portfolio = {"SBER", "VTBR"}  # тикеры по которым торгуем и скачиваем исторические данные
+    training_NN = {"BTC", "ETH", "XRP", "LTC", "BCH"} 
+    portfolio = {"BTC", "ETH", "XRP", "LTC", "BCH"}
     security_board = "TQBR"  # класс тикеров
 
     # доступные M1, M10, H1

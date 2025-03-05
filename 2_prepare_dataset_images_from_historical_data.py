@@ -13,79 +13,44 @@
 
 exit(777)  # для запрета запуска кода, иначе перепишет результаты
 
-import functions
-import functions_nn
-import os
+import pandas as pd
 import matplotlib.pyplot as plt
-from my_config.trade_config import Config  # Файл конфигурации торгового робота
+import os
 
+def prepare_chart_image(csv_file, output_dir, crypto, label):
+    data = pd.read_csv(csv_file)
+    data['open_time'] = pd.to_datetime(data['open_time'])
+    data = data.sort_values(by='open_time')
+    # Calculate moving averages
+    data['MA_short'] = data['close'].astype(float).rolling(window=10).mean()
+    data['MA_long'] = data['close'].astype(float).rolling(window=30).mean()
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(data['open_time'], data['close'].astype(float), label='Close Price', color='blue')
+    plt.plot(data['open_time'], data['MA_short'], label='MA 10', color='green')
+    plt.plot(data['open_time'], data['MA_long'], label='MA 30', color='red')
+    plt.title(f"{crypto} Price Chart - Label {label}")
+    plt.xlabel("Time")
+    plt.ylabel("Price")
+    plt.legend()
+    
+    os.makedirs(output_dir, exist_ok=True)
+    image_file = os.path.join(output_dir, f"{crypto}_{label}.png")
+    plt.savefig(image_file)
+    plt.close()
+    print(f"Saved image for {crypto} as {image_file}")
 
 if __name__ == "__main__":
-    # применение настроек из config.py
-    portfolio = Config.training_NN  # тикеры по которым обучаем нейросеть
-    timeframe_0 = Config.timeframe_0  # таймфрейм для обучения нейросети - вход
-    timeframe_1 = Config.timeframe_1  # таймфрейм для обучения нейросети - выход
-
-    # параметры для отрисовки картинок
-    period_sma_slow = Config.period_sma_slow  # период медленной SMA
-    period_sma_fast = Config.period_sma_fast  # период быстрой SMA
-    draw_window = Config.draw_window  # окно данных
-    steps_skip = Config.steps_skip  # шаг сдвига окна данных
-    draw_size = Config.draw_size  # размер стороны квадратной картинки
-
-    # создаем необходимые каталоги
-    functions.create_some_folders(timeframes=[timeframe_0], classes=["0", "1"])
-
-    for ticker in portfolio:
-
-        # считываем данные для обучения нейросети - выход - timeframe_1
-        df_out = functions_nn.get_df_t1(ticker, timeframe_1)
-        # print(df_out)
-        _date_out = df_out["datetime"].tolist()
-        _date_out_index = {_date_out[i]: i for i in range(len(_date_out))}  # {дата : индекс}
-        _close_out = df_out["close"].tolist()
-
-        # считываем данные для обучения нейросети - вход - timeframe_0
-        df_in = functions_nn.get_df_tf0(ticker, timeframe_0, period_sma_fast, period_sma_slow)
-        # print(df_in)
-        _date_in = df_in["datetime"].tolist()
-        _close_in = df_in["close"].tolist()
-        sma_fast = df_in["sma_fast"].tolist()
-        sma_slow = df_in["sma_slow"].tolist()
-
-        # # вывод на график Close + SMA последних 200 значений
-        # df_in[['close', 'sma_fast', 'sma_slow']].iloc[-200:].plot(label='df', figsize=(16, 8))
-        # plt.show()
-
-        _steps, j = 0, 0
-        # рисуем картинки только для младшего ТФ
-        for _date in _date_in:
-            if _date in _date_out:  # если дата младшего ТФ есть в датах старшего ТФ
-                _steps += 1
-                j += 1
-                if _steps >= steps_skip and j >= draw_window:
-                    _steps = 0
-
-                    # формируем картинку для нейросети с привязкой к дате и тикеру с шагом steps_skip
-                    # размером [draw_size, draw_size]
-                    _sma_fast_list = sma_fast[j-draw_window:j]
-                    _sma_slow_list = sma_slow[j-draw_window:j]
-                    _closes_list = _close_in[j-draw_window:j]
-
-                    # генерация картинки для обучения/теста нейросети
-                    img = functions_nn.generate_img(_sma_fast_list, _sma_slow_list, _closes_list, draw_window)
-                    # img.show()  # показать сгенерированную картинку
-
-                    _date_str = _date.strftime("%Y_%m_%d_%H_%M_%S")
-                    _filename = f"{ticker}-{timeframe_0}-{_date_str}.png"
-                    _path = os.path.join("NN", f"training_dataset_{timeframe_0}")
-
-                    # проводим классификацию изображений
-                    # if data.close[0] > data.close[-1]:
-                    if _close_out[_date_out_index[_date]] > _close_out[_date_out_index[_date]-1]:
-                        _path = os.path.join(_path, "1")
-                    else:
-                        _path = os.path.join(_path, "0")
-
-                    img.save(os.path.join(_path, _filename))
-                print(ticker, _date)
+    csv_dir = "csv"
+    output_dir = "NN/training_dataset_M1"
+    for file in os.listdir(csv_dir):
+        if file.endswith('.csv'):
+            csv_file = os.path.join(csv_dir, file)
+            crypto = file.split('.')[0]
+            data = pd.read_csv(csv_file)
+            # Determine label: if the last close is higher than the previous, label "1", else "0"
+            if len(data) > 1:
+                label = 1 if float(data['close'].iloc[-1]) > float(data['close'].iloc[-2]) else 0
+            else:
+                label = 0
+            prepare_chart_image(csv_file, output_dir, crypto, label)
