@@ -1,79 +1,92 @@
-"""
-    В этом коде реализована live стратегия, мы однократно асинхронно
-    получаем исторические данные с MOEX, и считаем что следующие асинхронно
-    полученные исторические данные приходят нам в live режиме.
-    Т.к. получаем их бесплатно, то есть задержка в полученных данных на 15 минут.
-
-    Используем нейросеть для прогноза о вхождении в сделку:
-    - нейросеть выбираем на шаге №3, по результатам loss, accuracy, val_loss, val_accuracy
-    - открываем позицию по рынку, как только получаем сигнал от нейросети с классом 1 - на покупку 1 лотом
-    - без стоп-лосса, т.к. закрывать позицию будем на следующем +1 баре старшего таймфрейма по рынку
-
-    Автор: Олег Шпагин
-    Github: https://github.com/WISEPLAT
-    Telegram: https://t.me/OlegSh777
-"""
-
-import asyncio
-import os.path
-
-import aiohttp
-import logging
-import functions
-import functions_nn
-from aiohttp import ClientSession
-from datetime import datetime, timedelta
-from typing import List, Optional
-
-from my_config.trade_config import Config  # Файл конфигурации торгового робота
-
-from keras.models import load_model
-from keras.utils.image_utils import img_to_array
-
-
 import time
+import json
+import torch
 from binance.client import Client
-import numpy as np
-import tensorflow as tf
 import pandas as pd
-from my_config import trade_config  # Imports training_NN and portfolio
+import numpy as np
+from pytorch_forecasting import TimeSeriesDataSet, TemporalFusionTransformer
+from my_config.trade_config import trade_config
 
-# Replace with your Binance API credentials
-API_KEY = "wuwZxHSpeRRKrzzUiDZlfVHn4lxMvUEeF5iyscrumlNeFQ2LUQpFj81Gcvc4BwMA"
-API_SECRET = "ZwI1lmff37wHjKYvHDtj8q5iDPinyCL7AJgWYpCLoOBgwLzy7oXY88DVuL1kyalG"
-client = Client(API_KEY, API_SECRET, testnet=True)
+# Загрузка параметров датасета
+with open("NN_winner/dataset_params.json", "r") as f:
+    dataset_params = json.load(f)
 
-model = tf.keras.models.load_model("NN_winner/crypto_model.hdf5", compile=False)
+# Загрузка модели
+model = TemporalFusionTransformer.load_from_checkpoint(
+    "NN_winner/crypto_model_tft.ckpt",
+    map_location=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+)
+model.eval()
+
+# Конфигурация API
+client = Client("uTCEuEO73fCXtNKgNFQXdOtQmWLDU7DvnrfW15Cj787PV7c9juQM4LyYmAuz4a7s", "mqLuFRdapde2kHizPnI67trMQ1hjuc4N42bzshqHm4ebi2NjsgT4Dn10fGHyYLTu")
+
+crypto_symbols = {
+    "BTC": "BTCUSDT",
+    "ETH": "ETHUSDT",
+    "XRP": "XRPUSDT",
+    "LTC": "LTCUSDT",
+    "BCH": "BCHUSDT"
+}
 
 def get_recent_data(symbol):
-    # Fetch the most recent 100 hourly klines for the provided symbol.
-    klines = client.get_historical_klines(symbol, Client.KLINE_INTERVAL_1HOUR, "100 hours ago UTC")
-    df = pd.DataFrame(klines, columns=['open_time', 'open', 'high', 'low', 'close', 'volume', 
-                                         'close_time', 'quote_asset_volume', 'number_of_trades', 
-                                         'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'])
-    # Convert the 'close' column to floats.
-    df['close'] = df['close'].astype(float)
-    # For demonstration, we create a feature matrix by repeating the 'close' price to form 10 features.
-    data = np.tile(df['close'].values.reshape(-1, 1), (1, 10))
-    return data
+    klines = client.get_historical_klines(
+        symbol, 
+        Client.KLINE_INTERVAL_1HOUR, 
+        "200 hours ago UTC"
+    )
+    df = pd.DataFrame(klines, columns=[
+        'open_time', 'open', 'high', 'low', 'close', 'volume',
+        'close_time', 'quote_asset_volume', 'number_of_trades',
+        'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+    ])
+    df['open_time'] = pd.to_datetime(df['open_time'], unit='ms')
+    df = df.sort_values("open_time")
+    df["time_idx"] = np.arange(len(df))
+    df["target"] = df["close"].astype(float)
+    df["group"] = symbol
+    return df
 
-def trade_decision(symbol):
-    data = get_recent_data(symbol)
-    if data.shape[0] < 100:
-        print(f"Not enough data for {symbol}")
+def predict_action(symbol):
+    df = get_recent_data(symbol)
+    
+    # Рассчитываем требуемую длину данных
+    required_length = dataset_params["max_encoder_length"] + dataset_params["max_prediction_length"]
+    if len(df) < required_length:
+        print(f"Недостаточно данных для {symbol} (нужно {required_length}, есть {len(df)})")
         return
-    input_data = np.expand_dims(data[-100:], axis=0)  # Shape: (1, 100, 10)
-    prediction = model.predict(input_data)
-    decision = "BUY" if prediction[0][0] > 0.5 else "SELL"
-    print(f"Crypto: {symbol}, Prediction: {prediction[0][0]:.3f}, Decision: {decision}")
-    # Here you can integrate actual trade execution via the Binance API.
+    
+    data_for_pred = df.iloc[-required_length:].copy()
+    
+    # Создаем dataset с сохраненными параметрами
+    prediction_dataset = TimeSeriesDataSet(
+        data_for_pred,
+        time_idx="time_idx",
+        target=dataset_params["target"],
+        group_ids=dataset_params["group_ids"],
+        max_encoder_length=dataset_params["max_encoder_length"],
+        max_prediction_length=dataset_params["max_prediction_length"],
+        time_varying_known_reals=dataset_params["time_varying_known_reals"],
+        time_varying_unknown_reals=dataset_params["time_varying_unknown_reals"],
+    )
+    
+    # Прогнозирование
+    test_dataloader = prediction_dataset.to_dataloader(train=False, batch_size=1, num_workers=0)
+    predictions = model.predict(test_dataloader)
+    
+    # Логика принятия решения
+    predicted_mean = predictions.numpy().mean()
+    last_price = data_for_pred["target"].iloc[-1]
+    decision = "BUY" if predicted_mean > last_price else "SELL"
+    print(f"{symbol}: Прогноз = {predicted_mean:.2f}, Текущая цена = {last_price:.2f} → {decision}")
 
 if __name__ == "__main__":
-    crypto_symbols = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "XRP": "XRPUSDT", "LTC": "LTCUSDT", "BCH": "BCHUSDT"}
     while True:
         for crypto in trade_config.portfolio:
             symbol = crypto_symbols.get(crypto)
             if symbol:
-                trade_decision(symbol)
-        # Sleep for 1 hour before the next decision cycle; adjust for testing if needed.
+                try:
+                    predict_action(symbol)
+                except Exception as e:
+                    print(f"Ошибка для {symbol}: {str(e)}")
         time.sleep(3600)

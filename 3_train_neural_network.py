@@ -1,9 +1,10 @@
 import os
 import pandas as pd
 import numpy as np
+import torch  # Добавлен импорт torch
 from pytorch_forecasting import TimeSeriesDataSet, TemporalFusionTransformer, QuantileLoss
-import pytorch_lightning as pl
-
+import lightning.pytorch as pl
+import json
 def load_data(csv_file, symbol="BTCUSDT"):
     df = pd.read_csv(csv_file)
     df["open_time"] = pd.to_datetime(df["open_time"])
@@ -18,10 +19,9 @@ if __name__ == "__main__":
     csv_file = "csv/BTCUSDT.csv"
     data = load_data(csv_file, symbol="BTCUSDT")
     
-    # Параметры модели: будем использовать 100 временных шагов для кодировщика и 10 для предсказания.
-    # Пример блока для создания датасета с отладочным выводом:
-    max_encoder_length = 30  # попробуйте снизить, если недостаточно записей
-    max_prediction_length = 10  # попробуйте снизить, если недостаточно записей
+    # Параметры модели
+    max_encoder_length = 30
+    max_prediction_length = 10
     training_cutoff = data["time_idx"].max() - max_prediction_length
 
     print("Общее количество записей:", len(data))
@@ -42,7 +42,7 @@ if __name__ == "__main__":
     
     train_dataloader = training_dataset.to_dataloader(train=True, batch_size=32, num_workers=0)
     
-    # Создаем модель TFT с указанными гиперпараметрами.
+    # Создаем модель TFT
     tft = TemporalFusionTransformer.from_dataset(
         training_dataset,
         learning_rate=0.03,
@@ -52,10 +52,24 @@ if __name__ == "__main__":
         loss=QuantileLoss(),
     )
     
-    trainer = pl.Trainer(max_epochs=10)   # Если доступен GPU, измените gpus=0 на gpus=1
+    trainer = pl.Trainer(max_epochs=10)
     trainer.fit(tft, train_dataloader)
     
+
+    dataset_params = {
+    "max_encoder_length": max_encoder_length,
+    "max_prediction_length": max_prediction_length,
+    "time_varying_known_reals": training_dataset.time_varying_known_reals,
+    "time_varying_unknown_reals": training_dataset.time_varying_unknown_reals,
+    "group_ids": training_dataset.group_ids,
+    "target": training_dataset.target
+    }
+
+    with open("NN_winner/dataset_params.json", "w") as f:
+        json.dump(dataset_params, f)
+
+
     os.makedirs("NN_winner", exist_ok=True)
     model_path = "NN_winner/crypto_model_tft.pth"
-    tft.save(model_path)
+    trainer.save_checkpoint("NN_winner/crypto_model_tft.ckpt") # Исправленный метод сохранения
     print("Модель TFT обучена и сохранена по пути:", model_path)

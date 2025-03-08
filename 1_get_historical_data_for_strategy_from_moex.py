@@ -4,7 +4,7 @@ import os
 
 # Укажите свои API-ключи Binance
 API_KEY = "uTCEuEO73fCXtNKgNFQXdOtQmWLDU7DvnrfW15Cj787PV7c9juQM4LyYmAuz4a7s"
-API_SECRET = "YOUR_BINANCE_APmqLuFRdapde2kHizPnI67trMQ1hjuc4N42bzshqHm4ebi2NjsgT4Dn10fGHyYLTuI_SECRET"
+API_SECRET = "mqLuFRdapde2kHizPnI67trMQ1hjuc4N42bzshqHm4ebi2NjsgT4Dn10fGHyYLTu"
 client = Client(api_key=API_KEY, api_secret=API_SECRET, testnet=True)
 
 def get_crypto_history(symbol, interval, start_str):
