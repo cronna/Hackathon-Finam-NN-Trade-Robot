@@ -1,44 +1,61 @@
-
-import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, LSTM, Dense, Multiply, Softmax, Lambda
-from tensorflow.keras.optimizers import Adam
-import tensorflow.keras.backend as K
-import numpy as np
 import os
+import pandas as pd
+import numpy as np
+from pytorch_forecasting import TimeSeriesDataSet, TemporalFusionTransformer, QuantileLoss
+import pytorch_lightning as pl
 
-def attention_block(inputs):
-    # Compute attention scores and weights, then derive a weighted sum of LSTM outputs.
-    attention_scores = Dense(1, activation='tanh')(inputs)  # (batch, timesteps, 1)
-    attention_scores = tf.keras.layers.Flatten()(attention_scores)  # (batch, timesteps)
-    attention_weights = Softmax()(attention_scores)  # (batch, timesteps)
-    attention_weights = tf.expand_dims(attention_weights, axis=-1)  # (batch, timesteps, 1)
-    attended_output = Multiply()([inputs, attention_weights])
-    # Sum over the time dimension
-    output = Lambda(lambda x: K.sum(x, axis=1))(attended_output)
-    return output
-
-def build_attention_model(input_shape):
-    inputs = Input(shape=input_shape)  # e.g., (100, 10)
-    lstm_out = LSTM(64, return_sequences=True)(inputs)
-    attended = attention_block(lstm_out)
-    output = Dense(1, activation='sigmoid')(attended)
-    model = Model(inputs=inputs, outputs=output)
-    return model
+def load_data(csv_file, symbol="BTCUSDT"):
+    df = pd.read_csv(csv_file)
+    df["open_time"] = pd.to_datetime(df["open_time"])
+    df = df.sort_values("open_time")
+    df["time_idx"] = np.arange(len(df))
+    df["target"] = df["close"].astype(float)
+    df["group"] = symbol
+    return df
 
 if __name__ == "__main__":
-    # Define input shape based on the data preprocessing (for example: 100 timesteps, 10 features)
-    input_shape = (100, 10)
-    model = build_attention_model(input_shape)
-    model.compile(optimizer=Adam(learning_rate=0.001), loss='binary_crossentropy', metrics=['accuracy'])
-    model.summary()
-
-    # Generate dummy training data for demonstration purposes.
-    X_train = np.random.rand(1000, 100, 10)
-    y_train = np.random.randint(0, 2, size=(1000, 1))
+    # Загружаем данные для одного тикера, например BTCUSDT
+    csv_file = "csv/BTCUSDT.csv"
+    data = load_data(csv_file, symbol="BTCUSDT")
     
-    model.fit(X_train, y_train, validation_split=0.2, epochs=5, batch_size=32)
+    # Параметры модели: будем использовать 100 временных шагов для кодировщика и 10 для предсказания.
+    # Пример блока для создания датасета с отладочным выводом:
+    max_encoder_length = 30  # попробуйте снизить, если недостаточно записей
+    max_prediction_length = 10  # попробуйте снизить, если недостаточно записей
+    training_cutoff = data["time_idx"].max() - max_prediction_length
+
+    print("Общее количество записей:", len(data))
+    print("training_cutoff:", training_cutoff)
+    training_data = data[data["time_idx"] <= training_cutoff]
+    print("Количество записей после фильтра:", len(training_data))
+
+    training_dataset = TimeSeriesDataSet(
+        training_data,
+        time_idx="time_idx",
+        target="target",
+        group_ids=["group"],
+        max_encoder_length=max_encoder_length,
+        max_prediction_length=max_prediction_length,
+        time_varying_known_reals=["time_idx"],
+        time_varying_unknown_reals=["target"],
+    )
+    
+    train_dataloader = training_dataset.to_dataloader(train=True, batch_size=32, num_workers=0)
+    
+    # Создаем модель TFT с указанными гиперпараметрами.
+    tft = TemporalFusionTransformer.from_dataset(
+        training_dataset,
+        learning_rate=0.03,
+        hidden_size=16,
+        attention_head_size=1,
+        dropout=0.1,
+        loss=QuantileLoss(),
+    )
+    
+    trainer = pl.Trainer(max_epochs=10)   # Если доступен GPU, измените gpus=0 на gpus=1
+    trainer.fit(tft, train_dataloader)
     
     os.makedirs("NN_winner", exist_ok=True)
-    model.save("NN_winner/crypto_model.hdf5")
-    print("Saved new crypto model as NN_winner/crypto_model.hdf5")
+    model_path = "NN_winner/crypto_model_tft.pth"
+    tft.save(model_path)
+    print("Модель TFT обучена и сохранена по пути:", model_path)

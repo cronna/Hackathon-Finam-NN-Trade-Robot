@@ -18,20 +18,13 @@ import asyncio
 import os.path
 
 import aiohttp
-import aiomoex
 import logging
 import functions
 import functions_nn
-import pandas as pd
-import numpy as np
 from aiohttp import ClientSession
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from FinamPy import FinamPy  # Коннект к Финам API - для выставления заявок на покупку/продажу
-from FinamPy.proto.tradeapi.v1.common_pb2 import BUY_SELL_BUY, BUY_SELL_SELL
-
-from my_config.Config import Config as ConfigAPI  # Файл конфигурации Финам API
 from my_config.trade_config import Config  # Файл конфигурации торгового робота
 
 from keras.models import load_model
@@ -46,9 +39,9 @@ import pandas as pd
 from my_config import trade_config  # Imports training_NN and portfolio
 
 # Replace with your Binance API credentials
-API_KEY = "YOUR_BINANCE_API_KEY"
-API_SECRET = "YOUR_BINANCE_API_SECRET"
-client = Client(API_KEY, API_SECRET)
+API_KEY = "wuwZxHSpeRRKrzzUiDZlfVHn4lxMvUEeF5iyscrumlNeFQ2LUQpFj81Gcvc4BwMA"
+API_SECRET = "ZwI1lmff37wHjKYvHDtj8q5iDPinyCL7AJgWYpCLoOBgwLzy7oXY88DVuL1kyalG"
+client = Client(API_KEY, API_SECRET, testnet=True)
 
 model = tf.keras.models.load_model("NN_winner/crypto_model.hdf5", compile=False)
 

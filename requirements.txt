@@ -1,6 +1,9 @@
-aiohttp
-aiomoex
+python-binance
+torch
+pytorch-lightning
+pytorch-forecasting
 pandas
+numpy
 matplotlib
-tensorflow
-finam-trade-api
+scikit-learn
+
